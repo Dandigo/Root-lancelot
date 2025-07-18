@@ -9,16 +9,58 @@ on:
         options:
         - 'lancelot'
         - 'merlin'
+      build_ksun:
+        description: 'Build KernelSU-Next A13+'
+        required: true
+        default: true
+        type: boolean
+      build_ksun_old:
+        description: 'Build KernelSU-Next A11'
+        required: true
+        default: true
+        type: boolean
+      build_suki:
+        description: 'Build SukiSU A13+'
+        required: true
+        default: true
+        type: boolean
+      build_suki_old:
+        description: 'Build SukiSU A11'
+        required: true
+        default: true
+        type: boolean
 
 jobs:
+  generate-build-matrix:
+    name: What to build?
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - id: set
+        name: Generate build matrix
+        run: |
+          targets=()
+          if [[ "${{ github.event.inputs.build_ksun }}" == "true" ]]; then targets+=("ksun"); fi
+          if [[ "${{ github.event.inputs.build_ksun_old }}" == "true" ]]; then targets+=("ksun-old"); fi
+          if [[ "${{ github.event.inputs.build_suki }}" == "true" ]]; then targets+=("suki"); fi
+          if [[ "${{ github.event.inputs.build_suki_old }}" == "true" ]]; then targets+=("suki-old"); fi
+          json=$(printf '%s\n' "${targets[@]}" | jq -R . | jq -s '{target: .}')
+          echo "matrix<<EOF" >> $GITHUB_OUTPUT
+          echo "$json" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
   build:
-    name: Build Kernel by ${{ github.actor }}
+    needs: generate-build-matrix
     runs-on: ubuntu-24.04
     env:
       DEVICE: ${{ github.event.inputs.select_device }}
       CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
       CCACHE_NOHASHDIR: "true"
       CCACHE_HARDLINK: "true"
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.generate-build-matrix.outputs.matrix) }}
     steps:
     - uses: actions/checkout@v4
 
@@ -35,7 +77,15 @@ jobs:
 
     - name: Prepare environment
       run: |
-        grep -v -E "^#|^\n" config.env | sed 's/ #.*//; s/#.*//' >> $GITHUB_ENV
+        TARGET_CONFIG_FILENAME="${{ matrix.target }}"
+        TARGET_CONFIG_FILENAME="${TARGET_CONFIG_FILENAME/-old/}"
+        TARGET_CONFIG_FILENAME_SUFFIX=$TARGET_CONFIG_FILENAME
+        grep -v -E "^#|^\n" config-${TARGET_CONFIG_FILENAME_SUFFIX}.env | sed 's/ #.*//; s/#.*//' >> $GITHUB_ENV
+
+    - name: Check if old Android build
+      if: contains(matrix.target, 'old')
+      run: |
+        echo "OLD_ANDROID_SUPPORT=true" >> $GITHUB_ENV
 
     - name: Set swap to 10G
       uses: pierotofy/set-swap-space@master
@@ -184,7 +234,7 @@ jobs:
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
         curl -LSs "$KERNELSU_SETUP_SOURCE" | bash -s ${{ env.KERNELSU_TAG }}
         KSU_VERSION="_$(cd $(echo "$KERNELSU_SETUP_SOURCE" | cut -d/ -f5) || cd KernelSU && expr $(git rev-list --count HEAD) + 10200)"
-        echo "UPLOADNAME=-$(echo "$KERNELSU_SETUP_SOURCE" | cut -d/ -f5)$KSU_VERSION" >> $GITHUB_ENV
+        echo "UPLOADNAME=-KernelSU-${{ matrix.target }}$KSU_VERSION" >> $GITHUB_ENV
         if [ ${{ env.KSU_REVERT }} = true ]; then
             git apply $GITHUB_WORKSPACE/patches/KSU_REVERT.patch
         fi
@@ -208,6 +258,25 @@ jobs:
                 echo "CONFIG_HAVE_KPROBES=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
                 echo "CONFIG_KPROBE_EVENTS=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
             fi
+        for config in CONFIG_KSU=y \
+                      CONFIG_WITH_KPROBES=n \
+                      CONFIG_KSU_SUSFS=y \
+                      CONFIG_KSU_SUSFS_SUS_PATH=y \
+                      CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y \
+                      CONFIG_KSU_SUSFS_SUS_MOUNT=y \
+                      CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y \
+                      CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y \
+                      CONFIG_KSU_SUSFS_SUS_KSTAT=y \
+                      CONFIG_KSU_SUSFS_TRY_UMOUNT=y \
+                      CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y \
+                      CONFIG_KSU_SUSFS_SPOOF_UNAME=y \
+                      CONFIG_KSU_SUSFS_ENABLE_LOG=y \
+                      CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y \
+                      CONFIG_KSU_SUSFS_SPOOF_PROC_CMDLINE=y \
+                      CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+        do
+        echo "$config" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
+        done
         fi
         if [ ${{ env.ADD_OVERLAYFS_CONFIG }} = true ]; then
             echo "CONFIG_OVERLAY_FS=y" >> arch/${{ env.KERNEL_ARCH }}/configs/${DEVICE}_defconfig
