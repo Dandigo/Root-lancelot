@@ -161,7 +161,7 @@ jobs:
                 mkdir gcc-64
                 tar -C gcc-64/ -Jxvf gcc-64.xz
                 rm gcc-64.tar.xz
-            elif [[ ${{ env.GCC_64_SOURCE }} == *'.tar.zst' ]]; then
+            elif [[ ${{ env.GCC_64_SOURi} == *'.tar.zst' ]]; then
                 wget -nv -O gcc-64.tar.zst ${{ env.GCC_64_SOURCE }}
                 mkdir gcc-64
                 tar -C gcc-64/ -I zstd -xf gcc-64.tar.zst
@@ -327,6 +327,19 @@ jobs:
             git clone https://github.com/Jbub5/connectivity.git --depth=1
             cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
         fi
+        
+    - name: Integrate SUSFS
+  run: |
+    git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu
+    cp /tmp/susfs4ksu/include/linux/susfs.h kernel_workspace/android-kernel/include/linux/
+    cp -r /tmp/susfs4ksu/fs/susfs kernel_workspace/android-kernel/fs/
+    # Add Kconfig and Makefile entries if necessary
+    if ! grep -q 'source "fs/susfs/Kconfig"' kernel_workspace/android-kernel/fs/Kconfig; then
+      echo 'source "fs/susfs/Kconfig"' >> kernel_workspace/android-kernel/fs/Kconfig
+    fi
+    if ! grep -q 'obj-$(CONFIG_SUSFS) += susfs/' kernel_workspace/android-kernel/fs/Makefile; then
+      echo 'obj-$(CONFIG_SUSFS) += susfs/' >> kernel_workspace/android-kernel/fs/Makefile
+    fi
 
     - name: Setup ccache
       if: env.ENABLE_CCACHE == 'true'
